@@ -29,10 +29,10 @@ func main() {
 		prNumber, ok := ent.attrs["prNumber"]
 		if ok {
 			if *projectGithub != "" {
-				fmt.Printf(" (PR: https://github.com/%v/pulls/%v)", *projectGithub, prNumber)
+				fmt.Printf(" PR: https://github.com/%v/pulls/%v", *projectGithub, prNumber)
 			} else {
 				prFrom := ent.attrs["prFrom"]
-				fmt.Printf(" (PR: #%v from %v)", prNumber, prFrom)
+				fmt.Printf(" PR: #%v from %v", prNumber, prFrom)
 			}
 		}
 		fmt.Printf("\n")
