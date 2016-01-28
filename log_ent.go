@@ -39,11 +39,7 @@ func (entScanner *LogEntScanner) Scan() bool {
 
 	entScanner.ent.Reset()
 
-	if ok, err := entScanner.ent.scanCommit(entScanner.scanner); err != nil {
-		entScanner.err = err
-		return false
-	} else if !ok {
-		entScanner.done = true
+	if !entScanner.scanCommit() {
 		return false
 	}
 
@@ -74,6 +70,39 @@ func (entScanner *LogEntScanner) Scan() bool {
 	return true
 }
 
+func (entScanner *LogEntScanner) scanOne(f bufio.SplitFunc) bool {
+	if entScanner.done {
+		return false
+	}
+	entScanner.scanner.Split(f)
+	if !entScanner.scanner.Scan() {
+		entScanner.done = true
+	}
+	return !entScanner.done
+}
+
+func (entScanner *LogEntScanner) scanCommit() bool {
+	// scan thru "commit "
+	if !entScanner.scanOne(commitFinder.SplitJust) {
+		return false
+	}
+
+	// scan thru space or newline
+	if !entScanner.scanOne(spaceNLSplit.Split) {
+		return false
+	}
+	entScanner.ent.commit = entScanner.scanner.Text()
+
+	// consume the rest of the line if necessary
+	if c, _ := spaceNLSplit.Last(); c != '\n' {
+		if !entScanner.scanOne(bufio.ScanLines) {
+			return false
+		}
+	}
+
+	return true
+}
+
 type LogEnt struct {
 	commit  string
 	subject string
@@ -97,31 +126,6 @@ func (ent *LogEnt) Reset() {
 	ent.subject = ""
 	ent.attrs = make(map[string]string)
 	ent.mess = nil
-}
-
-func (ent *LogEnt) scanCommit(scanner *bufio.Scanner) (bool, error) {
-	// scan thru "commit "
-	scanner.Split(commitFinder.SplitJust)
-	if !scanner.Scan() {
-		return false, scanner.Err()
-	}
-
-	// scan thru space or newline
-	scanner.Split(spaceNLSplit.Split)
-	if !scanner.Scan() {
-		return false, scanner.Err()
-	}
-	ent.commit = scanner.Text()
-
-	// consume the rest of the line if necessary
-	if c, _ := spaceNLSplit.Last(); c != '\n' {
-		scanner.Split(bufio.ScanLines)
-		if !scanner.Scan() {
-			return false, scanner.Err()
-		}
-	}
-
-	return true, nil
 }
 
 func (ent *LogEnt) scanAttrs(scanner *bufio.Scanner) (bool, error) {
