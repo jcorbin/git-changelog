@@ -18,7 +18,7 @@ func main() {
 		// Scan a new log entry...
 		ent := NewEnt()
 		if ok, err := ent.Scan(scanner); err != nil {
-			panic(err)
+			log.Fatal(err)
 		} else if !ok {
 			break
 		}
