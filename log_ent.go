@@ -3,9 +3,52 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"io"
 	"regexp"
 	"strings"
 )
+
+type LogEntScanner struct {
+	scanner *bufio.Scanner
+	err     error
+	ent     LogEnt
+	done    bool
+}
+
+func NewLogEntScanner(r io.Reader) *LogEntScanner {
+	return &LogEntScanner{
+		scanner: bufio.NewScanner(r),
+	}
+}
+
+func (entScanner *LogEntScanner) Ent() *LogEnt {
+	return &entScanner.ent
+}
+
+func (entScanner *LogEntScanner) Err() error {
+	if entScanner.err != nil {
+		return entScanner.err
+	}
+	return entScanner.scanner.Err()
+}
+
+func (entScanner *LogEntScanner) Scan() bool {
+	if entScanner.done {
+		return false
+	}
+
+	entScanner.ent.Reset()
+
+	if ok, err := entScanner.ent.Scan(entScanner.scanner); err != nil {
+		entScanner.err = err
+		return false
+	} else if !ok {
+		entScanner.done = true
+		return false
+	}
+
+	return true
+}
 
 type LogEnt struct {
 	commit  string
@@ -25,24 +68,11 @@ var spaceNLSplit = NewAnySplit([]byte(" \n"))
 var prRegex = regexp.MustCompile(`Merge pull request #(\d+) from ([^ ]+)`)
 var keySplit = NewByteDelim([]byte{':'}, []byte{' '}, []byte{'\n'})
 
-func (ent *LogEnt) Scan(scanner *bufio.Scanner) (bool, error) {
-	if ok, err := ent.scanCommit(scanner); !ok || err != nil {
-		return ok, err
-	}
-
-	if ok, err := ent.scanAttrs(scanner); !ok || err != nil {
-		return ok, err
-	}
-
-	if ok, err := ent.scanSubject(scanner); !ok || err != nil {
-		return ok, err
-	}
-
-	if ok, err := ent.scanMess(scanner); !ok || err != nil {
-		return ok, err
-	}
-
-	return true, nil
+func (ent *LogEnt) Reset() {
+	ent.commit = ""
+	ent.subject = ""
+	ent.attrs = make(map[string]string)
+	ent.mess = nil
 }
 
 func (ent *LogEnt) scanCommit(scanner *bufio.Scanner) (bool, error) {

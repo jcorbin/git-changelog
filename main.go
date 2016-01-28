@@ -1,9 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
+	"log"
 	"os"
 )
 
@@ -12,16 +12,10 @@ var projectGithub = flag.String("github", "", "project github user/repo")
 func main() {
 	flag.Parse()
 
-	scanner := bufio.NewScanner(os.Stdin)
+	scanner := NewLogEntScanner(stdout)
 
-	for {
-		// Scan a new log entry...
-		ent := NewEnt()
-		if ok, err := ent.Scan(scanner); err != nil {
-			log.Fatal(err)
-		} else if !ok {
-			break
-		}
+	for scanner.Scan() {
+		ent := scanner.Ent()
 
 		// ...and print a changelog entry
 		fmt.Printf("- %v", ent.subject)
@@ -43,5 +37,9 @@ func main() {
 		// }
 
 		// fmt.Printf("%#v\n", ent)
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Fatal(err)
 	}
 }
