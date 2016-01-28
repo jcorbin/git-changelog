@@ -43,11 +43,7 @@ func (entScanner *LogEntScanner) Scan() bool {
 		return false
 	}
 
-	if ok, err := entScanner.ent.scanAttrs(entScanner.scanner); err != nil {
-		entScanner.err = err
-		return false
-	} else if !ok {
-		entScanner.done = true
+	if !entScanner.scanAttrs() {
 		return false
 	}
 
@@ -103,6 +99,30 @@ func (entScanner *LogEntScanner) scanCommit() bool {
 	return true
 }
 
+func (entScanner *LogEntScanner) scanAttrs() bool {
+	// scan all "key: val..." contiguous lines
+	for {
+		// scan "key: "
+		if !entScanner.scanOne(keySplit.Split) {
+			return false
+		}
+		keyBytes := entScanner.scanner.Bytes()
+		if len(keyBytes) == 0 {
+			// empty key means keySplit hit a newline before a :
+			break
+		}
+
+		// scan value until newline
+		if !entScanner.scanOne(bufio.ScanLines) {
+			return false
+		}
+
+		entScanner.ent.attrs[string(keyBytes)] = entScanner.scanner.Text()
+	}
+
+	return true
+}
+
 type LogEnt struct {
 	commit  string
 	subject string
@@ -126,31 +146,6 @@ func (ent *LogEnt) Reset() {
 	ent.subject = ""
 	ent.attrs = make(map[string]string)
 	ent.mess = nil
-}
-
-func (ent *LogEnt) scanAttrs(scanner *bufio.Scanner) (bool, error) {
-	// scan all "key: val..." contiguous lines
-	for {
-		// scan "key: "
-		scanner.Split(keySplit.Split)
-		if !scanner.Scan() {
-			return false, scanner.Err()
-		}
-		keyBytes := scanner.Bytes()
-		if len(keyBytes) == 0 {
-			// empty key means keySplit hit a newline before a :
-			break
-		}
-
-		// scan value until newline
-		scanner.Split(bufio.ScanLines)
-		if !scanner.Scan() {
-			return false, scanner.Err()
-		}
-
-		ent.attrs[string(keyBytes)] = scanner.Text()
-	}
-	return true, nil
 }
 
 func (ent *LogEnt) scanSubject(scanner *bufio.Scanner) (bool, error) {
