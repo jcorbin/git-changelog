@@ -39,12 +39,36 @@ func (entScanner *LogEntScanner) Scan() bool {
 
 	entScanner.ent.Reset()
 
-	if ok, err := entScanner.ent.Scan(entScanner.scanner); err != nil {
+	if ok, err := entScanner.ent.scanCommit(entScanner.scanner); err != nil {
 		entScanner.err = err
 		return false
 	} else if !ok {
 		entScanner.done = true
 		return false
+	}
+
+	if ok, err := entScanner.ent.scanAttrs(entScanner.scanner); err != nil {
+		entScanner.err = err
+		return false
+	} else if !ok {
+		entScanner.done = true
+		return false
+	}
+
+	if ok, err := entScanner.ent.scanSubject(entScanner.scanner); err != nil {
+		entScanner.err = err
+		return false
+	} else if !ok {
+		entScanner.done = true
+		return false
+	}
+
+	if ok, err := entScanner.ent.scanMess(entScanner.scanner); err != nil {
+		entScanner.err = err
+		return false
+	} else if !ok {
+		entScanner.done = true
+		return true
 	}
 
 	return true
