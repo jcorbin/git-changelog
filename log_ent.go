@@ -26,15 +26,20 @@ var prRegex = regexp.MustCompile(`Merge pull request #(\d+) from ([^ ]+)`)
 var keySplit = NewByteDelim([]byte{':'}, []byte{' '}, []byte{'\n'})
 
 func (ent *LogEnt) Scan(scanner *bufio.Scanner) (bool, error) {
-	for _, f := range []func(*bufio.Scanner) (bool, error){
-		ent.scanCommit,
-		ent.scanAttrs,
-		ent.scanSubject,
-		ent.scanMess,
-	} {
-		if ok, err := f(scanner); !ok || err != nil {
-			return ok, err
-		}
+	if ok, err := ent.scanCommit(scanner); !ok || err != nil {
+		return ok, err
+	}
+
+	if ok, err := ent.scanAttrs(scanner); !ok || err != nil {
+		return ok, err
+	}
+
+	if ok, err := ent.scanSubject(scanner); !ok || err != nil {
+		return ok, err
+	}
+
+	if ok, err := ent.scanMess(scanner); !ok || err != nil {
+		return ok, err
 	}
 
 	return true, nil
