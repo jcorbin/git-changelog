@@ -47,19 +47,11 @@ func (entScanner *LogEntScanner) Scan() bool {
 		return false
 	}
 
-	if ok, err := entScanner.ent.scanSubject(entScanner.scanner); err != nil {
-		entScanner.err = err
-		return false
-	} else if !ok {
-		entScanner.done = true
+	if !entScanner.scanSubject() {
 		return false
 	}
 
-	if ok, err := entScanner.ent.scanMess(entScanner.scanner); err != nil {
-		entScanner.err = err
-		return false
-	} else if !ok {
-		entScanner.done = true
+	if !entScanner.scanMess() {
 		return true
 	}
 
@@ -123,6 +115,63 @@ func (entScanner *LogEntScanner) scanAttrs() bool {
 	return true
 }
 
+func (entScanner *LogEntScanner) scanSubject() bool {
+	// scan subject line
+	str, ok := scanMessagePart(entScanner.scanner, " ")
+	if !ok {
+		return false
+	}
+
+	// if we have a PR merge, extract more annotations, and promote the next
+	// message part
+	if prMatch := prRegex.FindStringSubmatch(str); prMatch != nil {
+		entScanner.ent.attrs["prNumber"] = prMatch[1]
+		entScanner.ent.attrs["prFrom"] = prMatch[2]
+
+		// TODO: would be nice to not accidentally skip any "^commit "
+		if next, ok := scanMessagePart(entScanner.scanner, " "); ok {
+			str = next
+		}
+	}
+
+	entScanner.ent.subject = str
+	return true
+}
+
+func (entScanner *LogEntScanner) scanMess() bool {
+	// scan message until next "commit "
+	if !entScanner.scanOne(commitFinder.SplitUntil) {
+		return false
+	}
+
+	// scan message paragraphs
+	messScanner := bufio.NewScanner(bytes.NewBuffer(entScanner.scanner.Bytes()))
+	for {
+		if str, ok := scanMessagePart(messScanner, "\n"); !ok {
+			return len(entScanner.ent.mess) > 0
+		} else {
+			entScanner.ent.mess = append(entScanner.ent.mess, str)
+		}
+	}
+}
+
+func scanMessagePart(scanner *bufio.Scanner, sep string) (string, bool) {
+	scanner.Split(bufio.ScanLines)
+	var parts []string
+	for scanner.Scan() {
+		// TODO: consistent de-indent by first-line detection
+		line := strings.TrimLeft(scanner.Text(), " ")
+		if len(line) == 0 {
+			return strings.Join(parts, sep), true
+		}
+		parts = append(parts, line)
+	}
+	if len(parts) > 0 {
+		return strings.Join(parts, sep), true
+	}
+	return "", false
+}
+
 type LogEnt struct {
 	commit  string
 	subject string
@@ -146,64 +195,4 @@ func (ent *LogEnt) Reset() {
 	ent.subject = ""
 	ent.attrs = make(map[string]string)
 	ent.mess = nil
-}
-
-func (ent *LogEnt) scanSubject(scanner *bufio.Scanner) (bool, error) {
-	// scan subject line
-	scanner.Split(bufio.ScanLines)
-	str, err := scanMessagePart(scanner, " ")
-	if err != nil {
-		return false, err
-	}
-
-	// if we have a PR merge, extract more annotations, and promote the next
-	// message part
-	if prMatch := prRegex.FindStringSubmatch(str); prMatch != nil {
-		ent.attrs["prNumber"] = prMatch[1]
-		ent.attrs["prFrom"] = prMatch[2]
-
-		// TODO: would be nice to not accidentally skip any "^commit "
-		if next, err := scanMessagePart(scanner, " "); err != nil {
-			return false, err
-		} else {
-			str = next
-		}
-	}
-
-	ent.subject = str
-	return true, nil
-}
-
-func (ent *LogEnt) scanMess(scanner *bufio.Scanner) (bool, error) {
-	// scan message until next "commit "
-	scanner.Split(commitFinder.SplitUntil)
-	if !scanner.Scan() {
-		return false, scanner.Err()
-	}
-
-	// scan message paragraphs
-	messScanner := bufio.NewScanner(bytes.NewBuffer(scanner.Bytes()))
-	for {
-		if str, err := scanMessagePart(messScanner, "\n"); err != nil {
-			return true, err
-		} else if len(str) == 0 {
-			return true, nil
-		} else {
-			ent.mess = append(ent.mess, str)
-		}
-	}
-}
-
-func scanMessagePart(scanner *bufio.Scanner, sep string) (string, error) {
-	var parts []string
-	for scanner.Scan() {
-		// TODO: consistent de-indent by first-line detection
-		line := strings.TrimLeft(scanner.Text(), " ")
-		if len(line) == 0 {
-			break
-		}
-		parts = append(parts, line)
-	}
-	part := strings.Join(parts, sep)
-	return part, scanner.Err()
 }
