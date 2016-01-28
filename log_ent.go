@@ -142,10 +142,10 @@ func scanMessagePart(scanner *bufio.Scanner, sep string) (string, error) {
 		// TODO: consistent de-indent by first-line detection
 		line := strings.TrimLeft(scanner.Text(), " ")
 		if len(line) == 0 {
-			part := strings.Join(parts, sep)
-			return part, nil
+			break
 		}
 		parts = append(parts, line)
 	}
-	return "", scanner.Err()
+	part := strings.Join(parts, sep)
+	return part, scanner.Err()
 }
