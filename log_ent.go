@@ -3,196 +3,148 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"fmt"
 	"io"
 	"regexp"
-	"strings"
 )
 
+// LogEnt represents data extracted from a git log entry.
+type LogEnt struct {
+	commit  string
+	subject string
+	attrs   map[string]string
+	mess    []byte
+}
+
+// LogEntScanner scans log entries.
 type LogEntScanner struct {
 	scanner *bufio.Scanner
 	err     error
 	ent     LogEnt
-	done    bool
+	next    [][]byte
 }
 
+// NewLogEntScanner creates a new log entry scanner around an io.Reader.
 func NewLogEntScanner(r io.Reader) *LogEntScanner {
 	return &LogEntScanner{
 		scanner: bufio.NewScanner(r),
 	}
 }
 
-func (entScanner *LogEntScanner) Ent() *LogEnt {
-	return &entScanner.ent
+// Ent returns teh last scanned entry.
+func (es *LogEntScanner) Ent() LogEnt {
+	return es.ent
 }
 
-func (entScanner *LogEntScanner) Err() error {
-	if entScanner.err != nil {
-		return entScanner.err
+// Err returns any scanning error.
+func (es *LogEntScanner) Err() error {
+	if es.err != nil {
+		return es.err
 	}
-	return entScanner.scanner.Err()
+	return es.scanner.Err()
 }
 
-func (entScanner *LogEntScanner) Scan() bool {
-	if entScanner.done {
+var (
+	commitPattern = regexp.MustCompile(`commit ([0-9a-fA-F]+)`)
+	keyValPattern = regexp.MustCompile(`(.+?):\s+(.+)`)
+	prMergeRegex  = regexp.MustCompile(`Merge .*#(\d+) from ([^ ]+)`)
+	prSquashRegex = regexp.MustCompile(`(.+) +\(#(\d+)\)$`)
+)
+
+// Scan try to scan a log entry, returning true if another log entry may be
+// scanned. When false is returned, either an error is set or EOF has been hit.
+func (es *LogEntScanner) Scan() bool {
+	if es.err != nil {
 		return false
 	}
 
-	entScanner.ent.Reset()
-
-	if !entScanner.scanCommit() {
-		return false
-	}
-
-	if !entScanner.scanAttrs() {
-		return false
-	}
-
-	if !entScanner.scanSubject() {
-		return false
-	}
-
-	if !entScanner.scanMess() {
-		return true
-	}
-
-	return true
-}
-
-func (entScanner *LogEntScanner) scanOne(f bufio.SplitFunc) bool {
-	if entScanner.done {
-		return false
-	}
-	entScanner.scanner.Split(f)
-	if !entScanner.scanner.Scan() {
-		entScanner.done = true
-	}
-	return !entScanner.done
-}
-
-func (entScanner *LogEntScanner) scanCommit() bool {
-	// scan thru "commit "
-	if !entScanner.scanOne(commitFinder.SplitJust) {
-		return false
-	}
-
-	// scan thru space or newline
-	if !entScanner.scanOne(spaceNLSplit.Split) {
-		return false
-	}
-	entScanner.ent.commit = entScanner.scanner.Text()
-
-	// consume the rest of the line if necessary
-	if c, _ := spaceNLSplit.Last(); c != '\n' {
-		if !entScanner.scanOne(bufio.ScanLines) {
-			return false
-		}
-	}
-
-	return true
-}
-
-func (entScanner *LogEntScanner) scanAttrs() bool {
-	// scan all "key: val..." contiguous lines
-	for {
-		// scan "key: "
-		if !entScanner.scanOne(keySplit.Split) {
-			return false
-		}
-		keyBytes := entScanner.scanner.Bytes()
-		if len(keyBytes) == 0 {
-			// empty key means keySplit hit a newline before a :
-			break
-		}
-
-		// scan value until newline
-		if !entScanner.scanOne(bufio.ScanLines) {
-			return false
-		}
-
-		entScanner.ent.attrs[string(keyBytes)] = entScanner.scanner.Text()
-	}
-
-	return true
-}
-
-func (entScanner *LogEntScanner) scanSubject() bool {
-	// scan subject line
-	str, ok := scanMessagePart(entScanner.scanner, " ")
-	if !ok {
-		return false
-	}
-
-	// if we have a PR merge, extract more annotations, and promote the next
-	// message part
-	if prMatch := prRegex.FindStringSubmatch(str); prMatch != nil {
-		entScanner.ent.attrs["prNumber"] = prMatch[1]
-		entScanner.ent.attrs["prFrom"] = prMatch[2]
-
-		// TODO: would be nice to not accidentally skip any "^commit "
-		if next, ok := scanMessagePart(entScanner.scanner, " "); ok {
-			str = next
-		}
-	}
-
-	entScanner.ent.subject = str
-	return true
-}
-
-func (entScanner *LogEntScanner) scanMess() bool {
-	// scan message until next "commit "
-	if !entScanner.scanOne(commitFinder.SplitUntil) {
-		return false
-	}
-
-	// scan message paragraphs
-	messScanner := bufio.NewScanner(bytes.NewBuffer(entScanner.scanner.Bytes()))
-	for {
-		if str, ok := scanMessagePart(messScanner, "\n"); !ok {
-			return len(entScanner.ent.mess) > 0
-		} else {
-			entScanner.ent.mess = append(entScanner.ent.mess, str)
-		}
-	}
-}
-
-func scanMessagePart(scanner *bufio.Scanner, sep string) (string, bool) {
-	scanner.Split(bufio.ScanLines)
-	var parts []string
-	for scanner.Scan() {
-		// TODO: consistent de-indent by first-line detection
-		line := strings.TrimLeft(scanner.Text(), " ")
-		if len(line) == 0 {
-			return strings.Join(parts, sep), true
-		}
-		parts = append(parts, line)
-	}
-	if len(parts) > 0 {
-		return strings.Join(parts, sep), true
-	}
-	return "", false
-}
-
-type LogEnt struct {
-	commit  string
-	subject string
-	attrs   map[string]string
-	mess    []string
-}
-
-func NewEnt() *LogEnt {
-	return &LogEnt{
+	es.ent = LogEnt{
 		attrs: make(map[string]string),
 	}
+
+	if es.next == nil {
+		// scan "commit SHA.*" line
+		for es.scanner.Scan() {
+			if m := commitPattern.FindSubmatch(es.scanner.Bytes()); m != nil {
+				es.next = m
+				break
+			}
+		}
+		if es.next == nil {
+			return false
+		}
+	}
+	es.ent.commit = string(es.next[1])
+
+	return es.scanKeyVals()
 }
 
-var commitFinder = NewBytesFinder([]byte("commit "))
-var spaceNLSplit = NewAnySplit([]byte(" \n"))
-var prRegex = regexp.MustCompile(`Merge pull request #(\d+) from ([^ ]+)`)
-var keySplit = NewByteDelim([]byte{':'}, []byte{' '}, []byte{'\n'})
+func (es *LogEntScanner) scanKeyVals() bool {
+	// scan all "key: val..." contiguous lines
+	for es.scanner.Scan() {
+		if len(es.scanner.Bytes()) == 0 {
+			return es.scanSubject()
+		}
+		if m := keyValPattern.FindSubmatch(es.scanner.Bytes()); m != nil {
+			es.ent.attrs[string(m[1])] = string(m[2])
+			continue
+		}
+		es.err = fmt.Errorf("expected `key: val` line, instead of %q", es.scanner.Bytes())
+		break
+	}
+	return false
+}
 
-func (ent *LogEnt) Reset() {
-	ent.commit = ""
-	ent.subject = ""
-	ent.attrs = make(map[string]string)
-	ent.mess = nil
+func (es *LogEntScanner) scanSubject() bool {
+	var buf bytes.Buffer
+	for {
+		// scan a message paragraph, normalizing newlines
+		buf.Reset()
+		for es.scanner.Scan() {
+			b := es.scanner.Bytes()
+			b = bytes.TrimLeft(b, " ")
+			if len(b) == 0 {
+				break
+			}
+			if buf.Len() > 0 {
+				buf.Write([]byte{' '})
+			}
+			buf.Write(b)
+		}
+		if buf.Len() == 0 {
+			return false
+		}
+
+		// extract an PR annotations, and then scan another paragraph for the subject
+		if m := prMergeRegex.FindSubmatch(buf.Bytes()); m != nil {
+			es.ent.attrs["prNumber"] = string(m[1])
+			es.ent.attrs["prFrom"] = string(m[2])
+			continue
+		}
+
+		if m := prSquashRegex.FindSubmatch(buf.Bytes()); m != nil {
+			es.ent.attrs["prNumber"] = string(m[2])
+			es.ent.subject = string(m[1])
+			return es.scanMessage()
+		}
+
+		// otherwise we've found the subject, and we can move on to the rest of the message
+		es.ent.subject = string(buf.String())
+		return es.scanMessage()
+	}
+}
+
+func (es *LogEntScanner) scanMessage() bool {
+	// scan until next "commit SHA.*" line, collecting message bytes
+	var buf bytes.Buffer
+	for es.scanner.Scan() {
+		if m := commitPattern.FindSubmatch(es.scanner.Bytes()); m != nil {
+			es.ent.mess = buf.Bytes()
+			es.next = m
+			return true
+		}
+		buf.Write(es.scanner.Bytes())
+		buf.Write([]byte{'\n'})
+	}
+	return false
 }
